@@ -1,7 +1,9 @@
 import { fetchTokenInfo } from '@/utils/tokenUtils';
+import { handleSendToken } from '@/utils/transactionUtils';
 import { Ionicons } from '@expo/vector-icons';
 import { useLoginWithEmail, usePrivy } from '@privy-io/expo';
 import axios from 'axios';
+import type { BigNumber } from 'ethers';
 import { ethers } from 'ethers';
 import * as Clipboard from 'expo-clipboard';
 import { useRouter } from 'expo-router';
@@ -44,10 +46,10 @@ const ActionButton = ({ icon, label, onPress }) => (
 const TransactionItem = ({ item, isLast }) => (
   <View style={[styles.transactionItem, isLast && styles.transactionItemLast]}>
     <View style={styles.transactionIconContainer}>
-      <Ionicons 
-        name={item.from?.toLowerCase() === item.to?.toLowerCase() ? "swap-horizontal" : "arrow-forward"} 
-        size={16} 
-        color="#6366F1" 
+      <Ionicons
+        name={item.from?.toLowerCase() === item.to?.toLowerCase() ? "swap-horizontal" : "arrow-forward"}
+        size={16}
+        color="#6366F1"
       />
     </View>
     <View style={styles.transactionDetails}>
@@ -73,19 +75,39 @@ export default function LoginWithEmail() {
   const [step, setStep] = useState(1);
   const [email, setEmail] = useState('');
   const [code, setCode] = useState('');
-  const [wallet, setWallet] = useState(null);
-  const [provider, setProvider] = useState(null);
-  const [tokenInfo, setTokenInfo] = useState(null);
-  const [ethBalance, setEthBalance] = useState();
-  const [isLoading, setIsLoading] = useState(false);
-  const [transactions, setTransactions] = useState([]);
-  const [loadingTransactions, setLoadingTransactions] = useState(true);
-  const [showSendModal, setShowSendModal] = useState(false);
-  const [showReceiveModal, setShowReceiveModal] = useState(false);
-  const [showScanModal, setShowScanModal] = useState(false); 
-  const [recipientAddress, setRecipientAddress] = useState('');
-  const [transferAmount, setTransferAmount] = useState('');
-  const [isTransferring, setIsTransferring] = useState(false);
+  type WalletType = { address: string } | null;
+  type ProviderType = ethers.providers.JsonRpcProvider | null;
+  type TokenInfoType = {
+    balance: BigNumber;
+    balanceFormatted: string;
+    symbol: string;
+    decimals: number;
+    address?: string;
+  } | null;
+  type TransactionType = {
+    hash: string;
+    from: string;
+    to: string;
+    asset?: string;
+    value: string;
+    metadata: { blockTimestamp: string };
+    uniqueId?: string;
+  };
+
+  const [wallet, setWallet] = useState<WalletType>(null);
+  const [provider, setProvider] = useState<ProviderType>(null);
+  const [tokenInfo, setTokenInfo] = useState<TokenInfoType>(null);
+  const [ethBalance, setEthBalance] = useState<string>('');
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [transactions, setTransactions] = useState<TransactionType[]>([]);
+  const [loadingTransactions, setLoadingTransactions] = useState<boolean>(true);
+  const [showSendModal, setShowSendModal] = useState<boolean>(false);
+  const [showReceiveModal, setShowReceiveModal] = useState<boolean>(false);
+  const [showScanModal, setShowScanModal] = useState<boolean>(false);
+  const [recipientAddress, setRecipientAddress] = useState<string>('');
+  const [transferAmount, setTransferAmount] = useState<string>('');
+  const [isTransferring, setIsTransferring] = useState<boolean>(false);
+  // ...existing code...
   const walletAddress = user?.linked_accounts?.find(acc => acc.type === 'wallet')?.address || '';
   const router = useRouter();
 
@@ -93,8 +115,8 @@ export default function LoginWithEmail() {
   useEffect(() => {
     if (user && walletAddress) {
       setWallet({ address: walletAddress });
-      const provider = new ethers.providers.JsonRpcProvider(BASE_SEPOLIA_CONFIG.rpcUrl);
-      setProvider(provider);
+      const rpcProvider = new ethers.providers.JsonRpcProvider(BASE_SEPOLIA_CONFIG.rpcUrl);
+      setProvider(rpcProvider);
     }
   }, [user, walletAddress]);
 
@@ -108,9 +130,9 @@ export default function LoginWithEmail() {
     setIsLoading(true);
     try {
       await Promise.all([
-        fetchTokenInfo(provider, walletAddress, setTokenInfo),
+        fetchTokenInfo(provider, walletAddress, (info) => setTokenInfo(info)),
         // Fetch ETH balance
-        provider.getBalance(walletAddress).then(balance => {
+        provider.getBalance(walletAddress).then((balance: BigNumber) => {
           const formattedBalance = ethers.utils.formatEther(balance);
           setEthBalance(parseFloat(formattedBalance).toFixed(4));
         }),
@@ -122,7 +144,7 @@ export default function LoginWithEmail() {
       setIsLoading(false);
     }
   }, [provider, walletAddress]);
-  
+
   const reloadAll = () => {
     fetchAllData();
     fetchTransactionHistory();
@@ -139,7 +161,7 @@ export default function LoginWithEmail() {
     if (!wallet?.address) return;
     setLoadingTransactions(true);
     const timeoutMs = 10000;
-    let timeoutHandle = null;
+    let timeoutHandle: NodeJS.Timeout | null = null;
     try {
       const rpcUrl = BASE_SEPOLIA_CONFIG.rpcUrl;
       const contractAddress = CONTRACT_ADDRESS;
@@ -172,22 +194,22 @@ export default function LoginWithEmail() {
       const result = await Promise.race([fetchPromise, timeoutPromise]);
       if (timeoutHandle) clearTimeout(timeoutHandle);
       if (!Array.isArray(result)) throw new Error('Transaction fetch failed');
-      const [inRes, outRes] = result;
+      const [inRes, outRes] = result as any[];
       const inTransfers = inRes?.data?.result?.transfers || [];
       const outTransfers = outRes?.data?.result?.transfers || [];
       const allTransfers = [...inTransfers, ...outTransfers].filter(
-        (v, i, a) => a.findIndex(t => t.hash === v.hash) === i
+        (v: TransactionType, i: number, a: TransactionType[]) => a.findIndex(t => t.hash === v.hash) === i
       );
-      const sortedTransactions = allTransfers.sort((a, b) =>
+      const sortedTransactions = allTransfers.sort((a: TransactionType, b: TransactionType) =>
         new Date(b.metadata.blockTimestamp).getTime() - new Date(a.metadata.blockTimestamp).getTime()
       );
-      sortedTransactions.forEach((tx, idx) => {
+      sortedTransactions.forEach((tx: TransactionType, idx: number) => {
         tx.uniqueId = tx.hash + idx;
       });
       setTransactions(sortedTransactions);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error fetching transactions:', error);
-      Alert.alert('Error', error.message || 'Failed to load transaction history');
+      Alert.alert('Error', error?.message || 'Failed to load transaction history');
     } finally {
       setLoadingTransactions(false);
     }
@@ -238,7 +260,7 @@ export default function LoginWithEmail() {
     setWallet(null);
     setProvider(null);
     setTokenInfo(null);
-    setEthBalance('0.0000');
+    setEthBalance('');
     setTransactions([]);
   };
 
@@ -258,7 +280,7 @@ export default function LoginWithEmail() {
                 <Text style={styles.title}>Welcome Back</Text>
                 <Text style={styles.subtitle}>Sign in to access your wallet</Text>
               </View>
-              
+
               <View style={styles.inputContainer}>
                 <Text style={styles.inputLabel}>Email Address</Text>
                 <TextInput
@@ -270,13 +292,13 @@ export default function LoginWithEmail() {
                   style={styles.input}
                 />
               </View>
-              
+
               <Pressable style={styles.primaryButton} onPress={handleSendCode}>
                 <Text style={styles.buttonText}>Continue</Text>
               </Pressable>
             </View>
           )}
-          
+
           {step === 2 && (
             <View style={styles.card}>
               <View style={styles.authHeader}>
@@ -286,7 +308,7 @@ export default function LoginWithEmail() {
                 <Text style={styles.title}>Check Your Email</Text>
                 <Text style={styles.subtitle}>We sent a 6-digit code to {email}</Text>
               </View>
-              
+
               <View style={styles.codeContainer}>
                 <Text style={styles.inputLabel}>Verification Code</Text>
                 <CodeField
@@ -309,11 +331,11 @@ export default function LoginWithEmail() {
                   )}
                 />
               </View>
-              
+
               <Pressable style={styles.primaryButton} onPress={handleVerifyCode}>
                 <Text style={styles.buttonText}>Verify Code</Text>
               </Pressable>
-              
+
               <Pressable onPress={handleSendCode} style={styles.resendButton}>
                 <Text style={styles.resendText}>Didn't receive code? Resend</Text>
               </Pressable>
@@ -339,13 +361,13 @@ export default function LoginWithEmail() {
               isLoading={loadingTransactions}
               onRetry={reloadAll}
             />
-            
+
             {/* Minimized Header Section */}
             <View style={styles.compactHeader}>
               <View style={styles.addressSection}>
                 <Text style={styles.addressLabel}>WALLET</Text>
-                <Pressable 
-                  onPress={() => copyToClipboard(walletAddress)} 
+                <Pressable
+                  onPress={() => copyToClipboard(walletAddress)}
                   style={styles.addressContainer}
                   activeOpacity={0.7}
                 >
@@ -357,7 +379,7 @@ export default function LoginWithEmail() {
               <View style={styles.balanceSection}>
                 {tokenInfo ? (
                   <Text style={styles.balanceAmount}>
-                    {parseFloat(tokenInfo.balanceFormatted).toLocaleString(undefined, { 
+                    {parseFloat(tokenInfo.balanceFormatted).toLocaleString(undefined, {
                       minimumFractionDigits: 0,
                       maximumFractionDigits: 2
                     })}
@@ -366,27 +388,27 @@ export default function LoginWithEmail() {
                 ) : (
                   <Text style={styles.balanceError}>Unable to load</Text>
                 )}
-                
+
                 <Text style={styles.ethBalanceText}>{ethBalance} ETH</Text>
               </View>
             </View>
 
             {/* Compact Action Buttons */}
             <View style={styles.actions}>
-              <ActionButton 
-                icon="arrow-up-outline" 
-                label="Send" 
-                onPress={() => setShowSendModal(true)} 
+              <ActionButton
+                icon="arrow-up-outline"
+                label="Send"
+                onPress={() => setShowSendModal(true)}
               />
-              <ActionButton 
-                icon="arrow-down-outline" 
-                label="Receive" 
-                onPress={() => setShowReceiveModal(true)} 
+              <ActionButton
+                icon="arrow-down-outline"
+                label="Receive"
+                onPress={() => setShowReceiveModal(true)}
               />
-              <ActionButton 
-                icon="scan-outline" 
-                label="Scan" 
-                onPress={() => setShowScanModal(true)} 
+              <ActionButton
+                icon="scan-outline"
+                label="Scan"
+                onPress={() => setShowScanModal(true)}
               />
             </View>
           </View>
@@ -399,7 +421,7 @@ export default function LoginWithEmail() {
                 <Text style={styles.transactionCount}>{transactions.length}</Text>
               )}
             </View>
-            
+
             {loadingTransactions ? (
               <View style={styles.loadingTransactions}>
                 <ActivityIndicator size="small" color="#6366F1" />
@@ -436,20 +458,23 @@ export default function LoginWithEmail() {
             setRecipientAddress={setRecipientAddress}
             transferAmount={transferAmount}
             setTransferAmount={setTransferAmount}
-            onSend={() => {
-              setIsTransferring(true);
-              setTimeout(() => {
-                setIsTransferring(false);
-                setShowSendModal(false);
-                setRecipientAddress('');
-                setTransferAmount('');
-                Alert.alert('Success', 'Funds sent!');
-                fetchAllData();
-              }, 1200);
-            }}
+            onSend={() =>
+              handleSendToken(
+                wallet,
+                tokenInfo,
+                recipientAddress,
+                transferAmount,
+                ethBalance,
+                setIsTransferring,
+                fetchAllData,
+                setShowSendModal,
+                setRecipientAddress,
+                setTransferAmount
+              )
+            }
             isTransferring={isTransferring}
           />
-          
+
           <ReceiveModal
             visible={showReceiveModal}
             onClose={() => setShowReceiveModal(false)}
@@ -499,14 +524,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 12,
   },
-  
+
   // Main Container - Reduced padding
   container: {
     flex: 1,
     backgroundColor: '#F8FAFC',
     padding: 12,
   },
-  
+
   // Card Styles - Reduced padding
   card: {
     backgroundColor: '#FFFFFF',
@@ -518,7 +543,7 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     elevation: 8,
   },
-  
+
   // Typography - Slightly smaller
   title: {
     fontSize: 24,
@@ -533,7 +558,7 @@ const styles = StyleSheet.create({
     color: '#6B7280',
     lineHeight: 22,
   },
-  
+
   // Input Styles - Reduced margins
   inputContainer: {
     marginBottom: 20,
@@ -554,7 +579,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     color: '#1F2937',
   },
-  
+
   // Button Styles - Reduced margins
   primaryButton: {
     backgroundColor: '#6366F1',
@@ -582,7 +607,7 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     fontSize: 14,
   },
-  
+
   // Code Field Styles - Slightly smaller
   codeContainer: {
     marginBottom: 24,
@@ -610,7 +635,7 @@ const styles = StyleSheet.create({
     borderColor: '#6366F1',
     backgroundColor: '#EEF2FF',
   },
-  
+
   // Loading States - Reduced padding
   loadingContainer: {
     alignItems: 'center',
@@ -625,7 +650,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 16,
   },
-  
+
   // Ultra-Compact Balance Card
   balanceCard: {
     backgroundColor: '#6366F1',
@@ -638,7 +663,7 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 6,
   },
-  
+
   // Minimized Header
   compactHeader: {
     flexDirection: 'row',
@@ -646,7 +671,7 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     marginBottom: 14,
   },
-  
+
   // Streamlined Address Section
   addressSection: {
     flex: 1,
@@ -676,7 +701,7 @@ const styles = StyleSheet.create({
   copyIcon: {
     marginLeft: 4,
   },
-  
+
   // Compact Balance Section
   balanceSection: {
     alignItems: 'flex-end',
@@ -708,7 +733,7 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
     borderRadius: 6,
   },
-  
+
   // Compact Action Buttons
   actions: {
     flexDirection: 'row',
@@ -732,7 +757,7 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '500',
   },
-  
+
   // Streamlined Transactions Section
   transactionsSection: {
     flex: 1,
@@ -767,7 +792,7 @@ const styles = StyleSheet.create({
     minWidth: 20,
     textAlign: 'center',
   },
-  
+
   // Compact Transaction Items
   transactionsList: {
     flex: 1,
@@ -809,7 +834,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#059669',
   },
-  
+
   // Compact Empty State
   emptyState: {
     alignItems: 'center',
@@ -827,7 +852,7 @@ const styles = StyleSheet.create({
     color: '#6B7280',
     textAlign: 'center',
   },
-  
+
   // Compact Logout
   logoutButton: {
     flexDirection: 'row',
